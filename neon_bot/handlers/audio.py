@@ -1,10 +1,12 @@
-# handlers/audio.py
 import os
 import re
-import time
 import asyncio
+import logging
 from aiogram import types
 from util import safe_remove, limit_cache
+
+# Loglarni sozlash
+logger = logging.getLogger(__name__)
 
 async def register_audio_handlers(dp, rt, config, services):
     bot = rt.bot
@@ -12,76 +14,109 @@ async def register_audio_handlers(dp, rt, config, services):
     whisper_model = services.get("whisper")
 
     async def translate_text(txt: str, lang_code: str = "uz"):
+        """Matnni keshni hisobga olgan holda tarjima qilish"""
         key = (txt, lang_code)
         if key in rt.translation_cache:
             return rt.translation_cache[key]
+        
         try:
             from deep_translator import GoogleTranslator
-            tr = GoogleTranslator(source="auto", target=lang_code).translate(txt)
+            # Bloklanishning oldini olish uchun run_in_executor ishlatish mumkin
+            loop = asyncio.get_event_loop()
+            tr = await loop.run_in_executor(
+                None, 
+                lambda: GoogleTranslator(source="auto", target=lang_code).translate(txt)
+            )
             rt.translation_cache[key] = tr
             await limit_cache(rt.translation_cache)
             return tr
-        except Exception:
+        except Exception as e:
+            logger.error(f"Translation error: {e}")
             return txt
 
     @dp.message_handler(content_types=["voice", "audio"])
     async def audio_handler(message: types.Message):
         chat_id = message.chat.id
-        mode = rt.user_settings.get(chat_id, config["DEFAULT_MODE"])
+        # Foydalanuvchi rejimini aniqlash
+        mode = rt.user_settings.get(chat_id, config.get("DEFAULT_MODE", "whisper"))
 
+        # Fayl ma'lumotlarini olish
         file_id = message.voice.file_id if message.voice else message.audio.file_id
         file = await bot.get_file(file_id)
-        downloaded = await bot.download_file(file.file_path)
-        tmp_path = f"tmp_{chat_id}.ogg"
         
-        with open(tmp_path, "wb") as f:
-            f.write(downloaded.read())
-
-        status_msg = await message.answer(f"⏳ Tahlil boshlandi... Rejim: {mode.upper()}")
+        # Noyob vaqtinchalik fayl nomi (konfliktlarning oldini oladi)
+        tmp_path = f"tmp_{chat_id}_{message.message_id}.ogg"
+        
+        status_msg = await message.answer(f"⏳ **Tahlil boshlandi...**\nRejim: `{mode.upper()}`", parse_mode="Markdown")
 
         async def process_audio():
             try:
+                # 1. Faylni yuklab olish
+                await bot.download_file(file.file_path, tmp_path)
+
+                # 2. Transkripsiya (Matnga aylantirish)
                 segments = []
                 if mode == "groq":
                     if not client_groq:
-                        await bot.edit_message_text("⚠️ Groq API kaliti xato!", chat_id, status_msg.message_id)
-                        return
+                        return await status_msg.edit_text("⚠️ Groq API sozlanmagan!")
+                    
                     from services.groq_service import transcribe_groq
-                    segments = transcribe_groq(client_groq, tmp_path)
+                    # Groq API orqali transkripsiya
+                    segments = await asyncio.get_event_loop().run_in_executor(
+                        None, transcribe_groq, client_groq, tmp_path
+                    )
                 else:
                     if not whisper_model:
-                        await bot.edit_message_text("⚠️ Whisper yuklanmagan!", chat_id, status_msg.message_id)
-                        return
+                        return await status_msg.edit_text("⚠️ Local Whisper modeli yuklanmagan!")
+                    
                     from services.whisper_service import transcribe_local
-                    # Local rejimda fp16=False qo'llanilganini tekshiring
-                    segments = transcribe_local(whisper_model, tmp_path)
+                    # Local Whisper orqali transkripsiya
+                    segments = await asyncio.get_event_loop().run_in_executor(
+                        None, transcribe_local, whisper_model, tmp_path
+                    )
 
-                await bot.edit_message_text("✍️ Tarjima qilinmoqda...", chat_id, status_msg.message_id)
+                if not segments:
+                    return await status_msg.edit_text("❌ Audio tahlilida matn topilmadi.")
 
+                await status_msg.edit_text("✍️ **Matn tayyor, tarjima qilinmoqda...**", parse_mode="Markdown")
+
+                # 3. Matnni qayta ishlash va tarjima qilish
                 raw_full = " ".join([s["text"].strip() for s in segments])
+                # Gaplarga bo'lish (regex orqali)
                 sentences = re.split(r'(?<=[.!?])\s+', raw_full)
 
                 final_lines = []
                 for sent in sentences:
-                    if not sent: continue
-                    tr = await translate_text(sent, "uz")
-                    final_lines.append(f"{sent} ({tr})")
+                    if not sent.strip():
+                        continue
+                    translated = await translate_text(sent, "uz")
+                    final_lines.append(f"🔹 {sent}\n🔸 *{translated}*")
 
-                final_text = "\n".join(final_lines)
-                if len(final_text) > 4000:
-                    await message.answer(final_text[:4000])
-                    await message.answer(final_text[4000:])
+                # Natijani birlashtirish
+                final_text = "\n\n".join(final_lines)
+
+                # 4. Natijani yuborish (Telegram cheklovlarini hisobga olgan holda)
+                if len(final_text) > 4096:
+                    for i in range(0, len(final_text), 4000):
+                        await message.answer(final_text[i:i+4000], parse_mode="Markdown")
                 else:
-                    await message.answer(final_text)
+                    await message.answer(final_text, parse_mode="Markdown")
 
+                # Jarayon tugagach status xabarini o'chirish
                 await bot.delete_message(chat_id, status_msg.message_id)
 
+            except asyncio.TimeoutError:
+                await message.answer("⏱ Vaqt tugadi. Audio juda uzun yoki server band.")
             except Exception as e:
-                await message.answer(f"❌ Xatolik: {e}")
+                logger.exception(f"Processing error: {e}")
+                await message.answer(f"❌ Xatolik yuz berdi: {str(e)}")
             finally:
+                # Vaqtinchalik faylni o'chirish
                 safe_remove(tmp_path)
                 rt.tasks.pop(chat_id, None)
 
-        # TUZATISH: rt.loop.create_task o'rniga asyncio.create_task ishlatamiz
-        task = asyncio.create_task(asyncio.wait_for(process_audio(), timeout=config["TASK_TIMEOUT_SEC"]))
+        # Taskni yaratish va boshqarish
+        task = asyncio.create_task(
+            asyncio.wait_for(process_audio(), timeout=config.get("TASK_TIMEOUT_SEC", 300))
+        )
         rt.tasks[chat_id] = task
