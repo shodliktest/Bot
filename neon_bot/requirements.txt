@@ -1,8 +1,8 @@
 aiogram==2.25.1
-streamlit==1.29.0
-firebase-admin==6.5.0
-groq==0.9.0
+streamlit
+firebase-admin
+groq
 openai-whisper
 torch
 torchaudio
-deep-translator==1.11.4
+deep-translator
