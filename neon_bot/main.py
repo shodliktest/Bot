@@ -11,8 +11,6 @@ from handlers.common import register_common_handlers
 from handlers.audio import register_audio_handlers
 
 logging.basicConfig(level=logging.INFO)
-
-# Global runtime instance
 rt = Runtime()
 config = load_config()
 
@@ -20,52 +18,38 @@ async def start_bot():
     if rt.is_running:
         return
     
-    # MUHIM: Hozirgi ishlayotgan loopni Runtime-ga bog'laymiz
+    # Loopni saqlash (Audio handler uchun kerak)
     rt.loop = asyncio.get_running_loop()
     
     rt.bot = Bot(token=config["BOT_TOKEN"])
     rt.dp = Dispatcher(rt.bot)
 
-    # Services
     db = init_firebase(config["FIREBASE_CONF"])
     groq_client = init_groq(config["GROQ_API_KEY"])
     whisper_model = init_whisper()
-
     services = {"db": db, "groq": groq_client, "whisper": whisper_model}
 
     await register_common_handlers(rt.dp, rt, config, db)
     await register_audio_handlers(rt.dp, rt, config, services)
 
     rt.is_running = True
-    print("Bot polling boshlandi...")
+    print("Bot polling boshlanmoqda...")
     
     try:
-        # skip_updates=True eski "Conflict" xabarlarini o'chirib yuboradi
-        await rt.dp.start_polling(skip_updates=True)
+        # skip_updates=True TypeError bergani uchun uni alohida chaqiramiz:
+        await rt.dp.skip_updates() 
+        # start_polling ichida skip_updates argumenti yo'q!
+        await rt.dp.start_polling() 
     finally:
-        # Bot to'xtaganda sessiyani tozalash
         session = await rt.bot.get_session()
         await session.close()
 
 async def stop_bot():
     if not rt.is_running:
         return
-    
-    try:
-        rt.dp.stop_polling()
-        await rt.dp.wait_closed()
-        
-        for _, task in list(rt.tasks.items()):
-            task.cancel()
-        rt.tasks.clear()
-    except Exception as e:
-        print(f"To'xtatishda xatolik: {e}")
-    finally:
-        rt.is_running = False
+    rt.is_running = False
+    rt.dp.stop_polling()
+    await rt.dp.wait_closed()
 
-# Funksiyalarni runtime obyektiga bog'lab qo'yamiz
 rt.start_bot = start_bot
 rt.stop_bot = stop_bot
-
-if __name__ == "__main__":
-    asyncio.run(start_bot())
