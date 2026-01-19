@@ -1,35 +1,40 @@
-# services/whisper_service.py
 import whisper
+import gc
 import os
+import torch
 
-# Modelni xotirada bir marta saqlash uchun global o'zgaruvchi
-_cached_model = None
+_model_cache = None
 
 def load_whisper_model(model_name: str = "base"):
-    global _cached_model
-    if _cached_model is not None:
-        return _cached_model
+    global _model_cache
+    if _model_cache is None:
+        print(f"--- Model yuklanmoqda: {model_name} ---")
+        _model_cache = whisper.load_model(model_name)
+    return _model_cache
+
+def transcribe_and_clean(tmp_path: str):
+    """Tahlil qiladi va RAM/Diskni darhol tozalaydi"""
+    model = load_whisper_model()
+    result_text = ""
     
     try:
-        print(f"--- Whisper modeli yuklanmoqda: {model_name} ---")
-        _cached_model = whisper.load_model(model_name)
-        return _cached_model
+        # 1. Tahlil qilish
+        if os.path.exists(tmp_path):
+            res = model.transcribe(tmp_path, fp16=False)
+            result_text = res.get("text", "")
     except Exception as e:
-        print(f"❌ Whisper yuklashda xato: {e}")
-        return None
-
-def transcribe_local(model, tmp_path: str):
-    if model is None:
-        return "Model yuklanmagan, transkripsiya qilib bo'lmaydi."
+        print(f"Transkripsiya xatosi: {e}")
+    finally:
+        # 2. AVTO-TOZALASH
+        # Diskni tozalash
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
         
-    try:
-        # Fayl mavjudligini tekshirish
-        if not os.path.exists(tmp_path):
-            return "Fayl topilmadi!"
+        # RAMni tozalash
+        gc.collect() 
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
             
-        # fp16=False - CPU da ishlash uchun juda muhim!
-        res = model.transcribe(tmp_path, fp16=False)
-        return res.get("text", "") # Faqat matnni qaytarish osonroq bo'lishi mumkin
-    except Exception as e:
-        print(f"❌ Transkripsiya xatosi: {e}")
-        return None
+        print("♻️ RAM va Vaqtinchalik fayllar tozalandi.")
+        
+    return result_text
