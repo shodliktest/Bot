@@ -20,6 +20,9 @@ async def start_bot():
     if rt.is_running:
         return
     
+    # MUHIM: Hozirgi ishlayotgan loopni Runtime-ga bog'laymiz
+    rt.loop = asyncio.get_running_loop()
+    
     rt.bot = Bot(token=config["BOT_TOKEN"])
     rt.dp = Dispatcher(rt.bot)
 
@@ -35,10 +38,12 @@ async def start_bot():
 
     rt.is_running = True
     print("Bot polling boshlandi...")
+    
     try:
-        await rt.dp.start_polling()
+        # skip_updates=True eski "Conflict" xabarlarini o'chirib yuboradi
+        await rt.dp.start_polling(skip_updates=True)
     finally:
-        # Polling to'xtaganda sessiyani yopish
+        # Bot to'xtaganda sessiyani tozalash
         session = await rt.bot.get_session()
         await session.close()
 
@@ -46,23 +51,19 @@ async def stop_bot():
     if not rt.is_running:
         return
     
-    print("Bot to'xtatilmoqda...")
     try:
-        # Pollingni to'xtatish
         rt.dp.stop_polling()
         await rt.dp.wait_closed()
         
-        # Barcha vazifalarni bekor qilish
         for _, task in list(rt.tasks.items()):
             task.cancel()
         rt.tasks.clear()
-        
     except Exception as e:
-        print(f"Stop error: {e}")
+        print(f"To'xtatishda xatolik: {e}")
     finally:
         rt.is_running = False
 
-# Funksiyalarni runtime ga bog'lash
+# Funksiyalarni runtime obyektiga bog'lab qo'yamiz
 rt.start_bot = start_bot
 rt.stop_bot = stop_bot
 
