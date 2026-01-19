@@ -3,6 +3,6 @@ streamlit==1.29.0
 firebase-admin==6.5.0
 groq==0.9.0
 openai-whisper
-torch==2.9.0
-torchaudio==2.9.0
+torch
+torchaudio
 deep-translator==1.11.4
