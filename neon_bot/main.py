@@ -1,3 +1,8 @@
+import sys
+import os
+
+# Loyiha joylashgan papkani tizim yo'liga qo'shish
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher, types
