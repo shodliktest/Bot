@@ -1,90 +1,81 @@
-import sys
 import os
-
-# Loyiha joylashgan papkani tizim yo'liga qo'shish
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+import sys
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 
-# O'z xizmatlaringizni import qilish
-from handlers.audio import register_audio_handlers
-from services.groq_service import init_groq
-from services.whisper_service import load_whisper_model
+# 1. YO'LLARNI SOZLASH (ImportError ning oldini olish uchun)
+# Bu kod main.py turgan papkani Python uchun "asosiy" papka qilib belgilaydi
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
 
-# 1. KONFIGURATSIYA
+# 2. KONFIGURATSIYA (O'z ma'lumotlaringizni kiriting)
 CONFIG = {
-    "BOT_TOKEN": "SIZNING_BOT_TOKENINGIZ",
-    "GROQ_API_KEY": "SIZNING_GROQ_KALITINGIZ",
-    "DEFAULT_MODE": "groq",  # yoki 'whisper'
-    "TASK_TIMEOUT_SEC": 300,
-    "MAX_CACHE_SIZE": 1000
+    "BOT_TOKEN": "SIZNING_BOT_TOKENINGIZ", # Bu yerga bot tokenini qo'ying
+    "GROQ_API_KEY": "SIZNING_GROQ_KALITINGIZ", # Bu yerga Groq API kalitini qo'ying
+    "DEFAULT_MODE": "groq", 
+    "TASK_TIMEOUT_SEC": 300
 }
 
-# 2. RUNTIME CLASS (Barcha holatlarni bitta obyektda saqlash)
+# 3. RUNTIME VA LOGGING
 class RuntimeContext:
     def __init__(self, bot):
         self.bot = bot
-        self.tasks = {}              # Faol vazifalar
-        self.user_settings = {}      # Foydalanuvchi rejimlari (groq/whisper)
-        self.translation_cache = {}  # Tarjima keshi
+        self.tasks = {}
+        self.user_settings = {}
+        self.translation_cache = {}
 
-# Loglarni sozlash
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 async def main():
-    # Bot va Dispatcher obyektlarini yaratish
+    # Bot obyektlarini yaratish
     bot = Bot(token=CONFIG["BOT_TOKEN"])
-    storage = MemoryStorage()
-    dp = Dispatcher(bot, storage=storage)
-
-    # Runtime obyektini yaratish
+    dp = Dispatcher(bot, storage=MemoryStorage())
     rt = RuntimeContext(bot)
 
-    # 3. XIZMATLARNI INIZIALIZATSIYA QILISH
+    # 4. MODULLARNI IMPORT QILISH (Try-Except ichida xavfsiz yuklash)
+    try:
+        from services.groq_service import init_groq
+        from services.whisper_service import load_whisper_model
+        from handlers.audio import register_audio_handlers
+        logger.info("✅ Barcha ichki modullar yuklandi.")
+    except ImportError as e:
+        logger.error(f"❌ Modullarni yuklashda xatolik: {e}")
+        return
+
+    # 5. XIZMATLARNI ISHGA TUSHIRISH
     services = {}
     
-    # Groq xizmatini yoqish
+    # Groq API
     try:
         services["groq"] = init_groq(CONFIG["GROQ_API_KEY"])
-        logger.info("✅ Groq API muvaffaqiyatli ulandi.")
+        logger.info("🚀 Groq API ulandi.")
     except Exception as e:
-        logger.error(f"❌ Groq xatosi: {e}")
+        logger.error(f"⚠️ Groq xatosi: {e}")
         services["groq"] = None
 
-    # Whisper modelini yuklash (Local rejim uchun)
+    # Whisper Local (Streamlit RAM yetishmasa xato berishi mumkin)
     try:
-        # Agar kompyuteringiz kuchi yetsa 'base' yoki 'small' ishlating
         services["whisper"] = load_whisper_model("base")
-        logger.info("✅ Whisper modeli yuklandi.")
+        logger.info("🎙 Whisper modeli yuklandi.")
     except Exception as e:
-        logger.error(f"❌ Whisper xatosi: {e}")
+        logger.error(f"⚠️ Whisper xatosi: {e}")
         services["whisper"] = None
 
-    # 4. HANDLERLARNI RO'YXATDAN O'TKAZISH
-    # Audio handler (biz yangilagan fayl)
+    # 6. HANDLERLARNI RO'YXATDAN O'TKAZISH
     await register_audio_handlers(dp, rt, CONFIG, services)
 
-    # Oddiy buyruqlar uchun handler
-    @dp.message_handler(commands=['start', 'help'])
-    async def send_welcome(message: types.Message):
-        await message.answer(
-            "👋 Salom! Men audio xabarlarni matnga aylantirib, tarjima qilaman.\n\n"
-            "⚙️ **Rejimni tanlash:** /mode_groq yoki /mode_whisper\n"
-            "🎙 Shunchaki audio yoki ovozli xabar yuboring."
-        )
+    # Start buyrug'i
+    @dp.message_handler(commands=['start'])
+    async def cmd_start(message: types.Message):
+        await message.answer("🤖 Bot ishga tushdi! Audio yoki ovozli xabar yuboring.")
 
-    @dp.message_handler(commands=['mode_groq', 'mode_whisper'])
-    async def set_mode(message: types.Message):
-        mode = "groq" if "groq" in message.text else "whisper"
-        rt.user_settings[message.chat.id] = mode
-        await message.answer(f"✅ Rejim o'zgardi: **{mode.upper()}**", parse_mode="Markdown")
-
-    # 5. BOTNI ISHGA TUSHIRISH
+    # 7. BOTNI POLLING REJIMIDA BOSHLASH
     try:
-        logger.info("🚀 Bot ishga tushdi...")
+        logger.info("🤖 Bot polling rejimida ishlamoqda...")
         await dp.start_polling()
     finally:
         await bot.close()
@@ -93,4 +84,4 @@ if __name__ == '__main__':
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        logger.info("🤖 Bot to'xtatildi.")
+        logger.info("Bot to'xtatildi.")
