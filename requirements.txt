@@ -1,0 +1,9 @@
+streamlit
+aiogram>=3.0
+openai-whisper
+deep-translator
+moviepy
+pytz
+torch
+pandas
+numpy
