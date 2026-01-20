@@ -10,5 +10,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Saytga so'rov yuborish
-        run: curl -
+        run: curl -I https://share.streamlit.io/audioai/audioai?cron=1
         
