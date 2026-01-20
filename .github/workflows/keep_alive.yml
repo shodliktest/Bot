@@ -1,1 +1,17 @@
+name: Botni Uyg'oq Saqlash (Cron)
 
+on:
+  schedule:
+    # Har 15 daqiqada ishga tushadi
+    - cron: '*/15 * * * *'
+  workflow_dispatch: # Qo'lda ishga tushirish uchun ham ruxsat
+
+jobs:
+  ping_site:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Saytga so'rov yuborish (Ping)
+        run: |
+          curl -I https://audiov.streamlit.app/
+          # DIQQAT: Yuqoridagi linkni o'z botingiz linkiga almashtiring!
+          
