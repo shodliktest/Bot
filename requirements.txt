@@ -2,9 +2,9 @@ streamlit
 aiogram>=3.0
 openai-whisper
 deep-translator
-moviepy==1.0.3
-decorator==4.4.2
-imageio==2.31.1
+moviepy
+decorator
+imageio
 imageio-ffmpeg
 pytz
 torch
