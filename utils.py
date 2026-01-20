@@ -1,5 +1,4 @@
 import os
-import html
 import pytz
 from datetime import datetime
 
@@ -7,24 +6,30 @@ from datetime import datetime
 UZ_TZ = pytz.timezone('Asia/Tashkent')
 
 def get_uz_time():
-    """O'zbekiston vaqti"""
+    """O'zbekiston vaqti (YYYY.MM.DD HH:MM:SS)"""
     return datetime.now(UZ_TZ).strftime('%Y.%m.%d %H:%M:%S')
 
 def clean_text(text):
-    """HTML belgilarni tozalash"""
-    if not text: return ""
-    return html.escape(text.replace("_", " ").replace("*", " "))
+    """
+    Telegram HTML formati uchun matnni xavfsiz holatga keltirish.
+    Apostrofni (&#x27;) kodga aylantirmaslik uchun faqat asosiy belgilarni o'zgartiradi.
+    """
+    if not text:
+        return ""
+    # Telegram HTML rejimi uchun faqat bularni escape qilish shart
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 def delete_temp_files(*file_paths):
-    """Fayllarni o'chirish"""
+    """Vaqtinchalik fayllarni o'chirish"""
     for path in file_paths:
         if path and os.path.exists(path):
-            try: os.remove(path)
-            except: pass
+            try:
+                os.remove(path)
+            except:
+                pass
 
 def format_time_stamp(seconds):
-    """[MM:SS] format"""
+    """Whisper sekundlarini [MM:SS] ko'rinishiga o'tkazish"""
     minutes = int(seconds // 60)
     secs = int(seconds % 60)
     return f"[{minutes:02d}:{secs:02d}]"
-    
