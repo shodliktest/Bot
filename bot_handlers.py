@@ -1,5 +1,7 @@
 import asyncio
 import os
+import re
+import math
 import streamlit as st
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -13,9 +15,11 @@ from deep_translator import GoogleTranslator
 # MODULLAR
 from config import BOT_TOKEN, ADMIN_ID
 from database import update_user, update_stats, load_db
-# Video funksiyasi olib tashlandi
 from utils import get_uz_time, clean_text, delete_temp_files, format_time_stamp
-from keyboards import get_main_menu, get_tr_kb, get_format_kb, get_admin_kb
+from keyboards import (
+    get_main_menu, get_tr_kb, get_split_kb, get_format_kb, 
+    get_admin_kb, get_contact_kb
+)
 
 try:
     bot = Bot(token=BOT_TOKEN)
@@ -24,6 +28,7 @@ except Exception as e:
     st.error(f"Token xatosi: {e}")
     st.stop()
 
+# --- STATES ---
 class UserStates(StatesGroup):
     waiting_for_contact_msg = State()
 
@@ -40,62 +45,157 @@ def load_whisper():
 
 model_local = load_whisper()
 
-# --- HANDLERLAR ---
-
+# --- 1. START VA YANGI USER NOTIFICATION ---
 @dp.message(Command("start"))
 async def cmd_start(m: types.Message):
+    # Bazaga yozish
+    count, is_new = 0, True # Database logikasi ichida hal bo'ladi
     update_user(m.from_user)
+    
+    # Adminga to'liq hisobot (User qayta start bossa ham boradi, nazorat uchun)
+    try:
+        u_link = f"@{m.from_user.username}" if m.from_user.username else "Username yo'q"
+        msg = (
+            f"🆕 <b>YANGI USER:</b> {m.from_user.full_name}\n"
+            f"🆔 <code>{m.from_user.id}</code>\n"
+            f"👤 {u_link}"
+        )
+        await bot.send_message(ADMIN_ID, msg, parse_mode="HTML")
+    except: pass
+
     welcome = (
-        f"👋 <b>Assalomu alaykum!</b>\n\n"
-        "🎙 Men audio xabarlarni matnga aylantiraman.\n"
-        "👇 <b>Boshlash uchun audio yuboring!</b>"
+        f"👋 <b>Assalomu alaykum, {m.from_user.first_name}!</b>\n\n"
+        f"🎙 <b>Suxandon AI</b> botiga xush kelibsiz.\n"
+        "Men audio fayllarni matnga aylantirib, tarjima qilib beraman.\n\n"
+        "👇 <b>Boshlash uchun audio fayl yuboring!</b>"
     )
     await m.answer(welcome, reply_markup=get_main_menu(m.from_user.id), parse_mode="HTML")
 
-# 1. AUDIO QABUL QILISH (Video olib tashlandi)
+# --- 2. YORDAM (MUKAMMAL) ---
+@dp.message(F.text == "ℹ️ Yordam")
+async def help_h(m: types.Message):
+    text = (
+        "📚 <b>SUXANDON AI - QO'LLANMA</b>\n\n"
+        "Bu bot orqali siz audio xabarlar, qo'shiqlar yoki intervyularni matn ko'rinishiga o'tkazishingiz mumkin.\n\n"
+        "<b>Qanday ishlatiladi?</b>\n"
+        "1️⃣ <b>Audio yuboring:</b> Botga mp3 fayl yoki voice (ovozli xabar) yuboring.\n"
+        "2️⃣ <b>Tarjima tanlang:</b> Matnni o'z holicha qoldirish yoki o'zbek/rus/ingliz tiliga tarjima qilishni tanlang. Tarjima asl matn yonida (qavs ichida) beriladi.\n"
+        "3️⃣ <b>Ko'rinishni tanlang:</b>\n"
+        "   🔹 <i>Time Split:</i> Har bir gap oldida vaqt [00:15] ko'rsatiladi. Subtitr uchun qulay.\n"
+        "   🔹 <i>Full Context:</i> Vaqtlarsiz, xuddi kitob matnidek yaxlit chiqadi.\n"
+        "4️⃣ <b>Formatni tanlang:</b>\n"
+        "   🔹 <i>TXT Fayl:</i> Matnni alohida fayl qilib tashlaydi (uzun matnlar uchun).\n"
+        "   🔹 <i>Chat:</i> Matnni shu yerning o'ziga xabar qilib yozadi.\n\n"
+        "⚠️ <b>Cheklovlar:</b> Fayl hajmi 20MB dan oshmasligi kerak.\n\n"
+        "👨‍💻 <b>Muammo bormi?</b> 'Bog'lanish' tugmasi orqali adminga yozishingiz mumkin."
+    )
+    await m.answer(text, parse_mode="HTML")
+
+# --- 3. ALOQA VA FEEDBACK (REPLAY BILAN) ---
+@dp.message(F.text == "👨‍💻 Bog'lanish")
+async def contact_h(m: types.Message):
+    await m.answer(
+        "👨‍💻 <b>Admin bilan aloqa bo'limi.</b>\n\n"
+        "Taklif yoki shikoyatingiz bo'lsa, 'Yozish' tugmasini bosing va xabaringizni qoldiring. "
+        "Admin javobi shu bot orqali keladi.",
+        reply_markup=get_contact_kb(), parse_mode="HTML"
+    )
+
+@dp.callback_query(F.data == "msg_to_admin")
+async def feedback_start(call: types.CallbackQuery, state: FSMContext):
+    await state.set_state(UserStates.waiting_for_contact_msg)
+    await call.message.answer("📝 <b>Xabaringizni yozib qoldiring:</b>", parse_mode="HTML")
+    await call.answer()
+
+@dp.message(UserStates.waiting_for_contact_msg)
+async def feedback_send(m: types.Message, state: FSMContext):
+    await state.clear()
+    
+    # Adminga boradigan xabar
+    u_link = f"@{m.from_user.username}" if m.from_user.username else "yo'q"
+    admin_msg = (
+        f"📩 <b>YANGI MUROJAAT:</b>\n"
+        f"👤 User: {m.from_user.full_name}\n"
+        f"🆔 ID: <code>{m.from_user.id}</code>\n"
+        f"🔗 Link: {u_link}\n\n"
+        f"📝 <b>Xabar:</b>\n{m.text}"
+    )
+    
+    await bot.send_message(ADMIN_ID, admin_msg, parse_mode="HTML")
+    await m.answer("✅ <b>Xabaringiz adminga yuborildi!</b>\nTez orada javob olasiz.", parse_mode="HTML")
+
+# --- 4. ADMIN REPLY (JAVOB QAYTARISH) ---
+@dp.message(F.chat.id == ADMIN_ID, F.reply_to_message)
+async def admin_reply_handler(m: types.Message):
+    # Admin reply qilgan xabarni tekshiramiz
+    original_msg = m.reply_to_message.text
+    
+    # ID ni qidirib topamiz (Regex orqali)
+    id_match = re.search(r"ID: (\d+)", original_msg)
+    
+    if id_match:
+        user_id = int(id_match.group(1))
+        try:
+            await bot.send_message(
+                user_id,
+                f"💬 <b>Admin javobi:</b>\n\n{m.text}",
+                parse_mode="HTML"
+            )
+            await m.answer(f"✅ Javob {user_id} ga yuborildi.")
+        except Exception as e:
+            await m.answer(f"❌ Xatolik: User botni bloklagan bo'lishi mumkin.\n{e}")
+    else:
+        await m.answer("❌ User ID si topilmadi. Iltimos, faqat botdan kelgan murojaat xabariga reply qiling.")
+
+
+# --- 5. AUDIO STEP-BY-STEP ---
+
 @dp.message(F.audio | F.voice)
 async def handle_audio(m: types.Message):
     if m.audio: fid, fsize = m.audio.file_id, m.audio.file_size
     else: fid, fsize = m.voice.file_id, m.voice.file_size
 
     if fsize > 20 * 1024 * 1024:
-        await m.answer("❌ Fayl juda katta (Maks 20MB).")
+        await m.answer("❌ <b>Fayl hajmi 20MB dan oshmasligi kerak!</b>", parse_mode="HTML")
         return
 
     u_h = f"@{m.from_user.username}" if m.from_user.username else m.from_user.full_name
     
-    # "src_lang" ni avtomatik 'auto' qilamiz
     user_data[m.chat.id] = {
-        'fid': fid, 
-        'uname': u_h, 
-        'type': 'audio',
-        'src_lang': 'auto', 
-        'tr_lang': None, 
-        'view': None
+        'fid': fid, 'uname': u_h, 'type': 'audio',
+        'src_lang': 'auto', 'tr_lang': None, 'view': None
     }
     
-    # Darhol tarjima menyusini chiqaramiz
-    await m.answer("🌍 <b>Matnni tarjima qilaymi?</b>", reply_markup=get_tr_kb(), parse_mode="HTML")
+    text = (
+        "🌍 <b>Audio matni tarjima qilinsinmi?</b>\n\n"
+        "<i>Agarda tarjima tanlansa, asl matn qoladi va uning yoniga (qavs ichida) tarjimasi yoziladi.</i>"
+    )
+    await m.answer(text, reply_markup=get_tr_kb(), parse_mode="HTML")
 
-# 2. TARJIMA TANLASH
 @dp.callback_query(F.data.startswith("tr_"))
 async def tr_lang_cb(call: types.CallbackQuery):
     lang = call.data.replace("tr_", "")
     user_data[call.message.chat.id]['tr_lang'] = lang
     
-    # Format menyusi
-    kb = InlineKeyboardBuilder()
-    kb.button(text="⏱ Split (Vaqt bilan)", callback_data="v_split")
-    kb.button(text="📖 Full Context (Butun)", callback_data="v_full")
-    await call.message.edit_text("📄 <b>Ko'rinishni tanlang:</b>", reply_markup=kb.as_markup(), parse_mode="HTML")
+    text = (
+        "📄 <b>Matn qanday ko'rinishda bo'lsin?</b>\n\n"
+        "⏱ <b>Time Split:</b> Har bir gap boshida vaqt [00:15] ko'rsatiladi.\n"
+        "📖 <b>Full Context:</b> Vaqtlarsiz, yaxlit kitob matni shaklida."
+    )
+    await call.message.edit_text(text, reply_markup=get_split_kb(), parse_mode="HTML")
 
-# 3. KO'RINISH TANLASH
 @dp.callback_query(F.data.startswith("v_"))
 async def view_cb(call: types.CallbackQuery):
     user_data[call.message.chat.id]['view'] = call.data.replace("v_", "")
-    await call.message.edit_text("💾 <b>Formatni tanlang:</b>", reply_markup=get_format_kb(), parse_mode="HTML")
+    
+    text = (
+        "💾 <b>Natijani qaysi formatda olishni xohlaysiz?</b>\n\n"
+        "📁 <b>TXT Fayl:</b> Hujjat sifatida tashlanadi (yuklab olish uchun).\n"
+        "💬 <b>Chat:</b> Oddiy xabar sifatida shu yerga yoziladi."
+    )
+    await call.message.edit_text(text, reply_markup=get_format_kb(), parse_mode="HTML")
 
-# 4. PROCESSOR (Video qismlari olib tashlandi)
+# --- 6. PROCESSOR (PROGRESS BAR 5% YANGILANISH BILAN) ---
 @dp.callback_query(F.data.startswith("f_"))
 async def start_process(call: types.CallbackQuery):
     global waiting_users
@@ -105,46 +205,78 @@ async def start_process(call: types.CallbackQuery):
     await call.message.delete()
 
     waiting_users += 1
-    wait_msg = await call.message.answer(f"⏳ Navbat: {waiting_users-1}")
+    wait_msg = await call.message.answer(f"⏳ Navbatdagi o'rin: {waiting_users}")
 
     async with async_lock:
         audio_path = f"audio_{chat_id}.mp3"
         result_path = f"res_{chat_id}.txt"
         
-        try:
-            async def update_progress(p, txt):
-                bar = "🟩" * (p // 10) + "⬜" * (10 - (p // 10))
-                try: await wait_msg.edit_text(f"🚀 {txt}\n{bar} {p}%", parse_mode="HTML")
-                except: pass
+        # Progress Bar funksiyasi (chiroyli va bosqichma-bosqich)
+        async def show_progress(percent, status_text):
+            # 20 ta kvadrat: har bir kvadrat 5%
+            blocks = int(percent // 5) 
+            bar = "🟩" * blocks + "⬜" * (20 - blocks)
+            try:
+                await wait_msg.edit_text(
+                    f"⚙️ <b>Jarayon ketmoqda...</b>\n"
+                    f"ℹ️ {status_text}\n\n"
+                    f"{bar} <b>{percent}%</b>",
+                    parse_mode="HTML"
+                )
+            except: pass
 
-            # YUKLASH
-            await update_progress(20, "Audio yuklanmoqda...")
+        try:
+            # 1. YUKLASH (0% dan 20% gacha - har 5% da)
+            for p in range(0, 25, 5):
+                await show_progress(p, "Fayl serverga yuklanmoqda...")
+                await asyncio.sleep(0.1) # Simulyatsiya
+            
             file = await bot.get_file(data['fid'])
             await bot.download_file(file.file_path, audio_path)
+            await show_progress(25, "Fayl qabul qilindi.")
 
-            # TAHLIL
-            await update_progress(50, "AI Tahlil qilmoqda...")
-            # Tilni avtomatik aniqlaydi
+            # 2. TAHLIL (25% dan 75% gacha)
+            # Whisper katta model bo'lgani uchun, u ishlayotganda real vaqtda yangilash qiyin.
+            # Lekin biz user zerikmasligi uchun oraliq xabar beramiz.
+            await show_progress(30, "Sun'iy intellekt ishga tushdi...")
+            await show_progress(40, "Ovoz to'lqinlari o'qilmoqda...")
+            
+            # Asosiy og'ir jarayon
             res = await asyncio.to_thread(model_local.transcribe, audio_path)
             segments = res['segments']
+            
+            await show_progress(75, "Matn tayyorlandi. Tarjima tekshirilmoqda...")
 
-            # FORMATLASH
-            await update_progress(80, "Formatlash...")
+            # 3. FORMATLASH VA TARJIMA (75% dan 95% gacha)
             tr_code = data.get('tr_lang') if data.get('tr_lang') != "orig" else None
             final_text = ""
+            
+            total_segs = len(segments)
+            processed = 0
 
+            # Segmentlarni qayta ishlash
+            temp_text_list = []
+            
             if data.get('view') == "full":
-                full_text = ""
                 for s in segments:
                     seg_text = clean_text(s['text'].strip())
                     if tr_code:
                         try:
                             tr = GoogleTranslator(source='auto', target=tr_code).translate(seg_text)
-                            full_text += f"{seg_text} ({clean_text(tr)}) "
-                        except: full_text += f"{seg_text} "
-                    else: full_text += f"{seg_text} "
-                final_text = full_text.strip()
-            else:
+                            temp_text_list.append(f"{seg_text} ({clean_text(tr)})")
+                        except: temp_text_list.append(seg_text)
+                    else:
+                        temp_text_list.append(seg_text)
+                    
+                    # Jarayonni ko'rsatish (har 10 ta segmentda yangilash)
+                    processed += 1
+                    if processed % 10 == 0 or processed == total_segs:
+                        prog = 75 + int((processed / total_segs) * 20)
+                        await show_progress(prog, f"Formatlash: {processed}/{total_segs} qism...")
+                
+                final_text = " ".join(temp_text_list)
+
+            else: # Time Split
                 for s in segments:
                     tm = format_time_stamp(s['start'])
                     seg_text = clean_text(s['text'].strip())
@@ -154,19 +286,25 @@ async def start_process(call: types.CallbackQuery):
                             final_text += f"{tm} {seg_text}\n<i>({clean_text(tr)})</i>\n\n"
                         except: final_text += f"{tm} {seg_text}\n\n"
                     else: final_text += f"{tm} {seg_text}\n\n"
+                    
+                    processed += 1
+                    if processed % 10 == 0 or processed == total_segs:
+                        prog = 75 + int((processed / total_segs) * 20)
+                        await show_progress(prog, f"Formatlash: {processed}/{total_segs} qism...")
 
-            # IMZO
+            # 4. YAKUNLASH (100%)
+            await show_progress(99, "Fayl tayyorlanmoqda...")
+            
             creator = data['uname']
             if not creator.startswith('@'): creator = f"@{creator.replace(' ', '_')}"
             imzo = f"\n\n---\n👤 <b>Yaratuvchi:</b> {creator}\n🤖 <b>Bot:</b> @{(await bot.get_me()).username}\n⏰ <b>Vaqt:</b> {get_uz_time()}"
             final_text += imzo
 
-            # STATISTIKA VA YUBORISH
             update_stats('audio', fmt)
 
             if fmt == "txt":
                 with open(result_path, "w", encoding="utf-8") as f: f.write(final_text)
-                await call.message.answer_document(types.FSInputFile(result_path), caption="✅ Tayyor!")
+                await call.message.answer_document(types.FSInputFile(result_path), caption="✅ <b>Natija tayyor!</b>", parse_mode="HTML")
             else:
                 if len(final_text) > 4000:
                     for i in range(0, len(final_text), 4000):
@@ -176,7 +314,7 @@ async def start_process(call: types.CallbackQuery):
             await wait_msg.delete()
 
         except Exception as e:
-            await call.message.answer(f"❌ Xatolik: {str(e)}")
+            await call.message.answer(f"❌ <b>Jarayonda xatolik yuz berdi:</b>\n{str(e)}", parse_mode="HTML")
         finally:
             delete_temp_files(audio_path, result_path)
             waiting_users -= 1
@@ -208,7 +346,6 @@ async def list_cb(call: types.CallbackQuery):
         for x in range(0, len(msg), 4000): await call.message.answer(msg[x:x+4000], parse_mode="HTML")
     else: await call.message.answer(msg, parse_mode="HTML")
 
-# Broadcast
 @dp.callback_query(F.data == "adm_bc")
 async def bc_cb(call: types.CallbackQuery, state: FSMContext):
     await call.message.answer("📢 Xabarni yuboring:")
@@ -229,29 +366,10 @@ async def bc_process(m: types.Message, state: FSMContext):
         except: pass
     await msg.edit_text(f"✅ {cnt} kishiga bordi.")
 
-@dp.message(F.text == "👨‍💻 Bog'lanish")
-async def contact_h(m: types.Message):
-    kb = InlineKeyboardBuilder()
-    kb.button(text="✍️ Yozish", callback_data="msg_to_admin")
-    await m.answer("Aloqa:", reply_markup=kb.as_markup())
-
-@dp.callback_query(F.data == "msg_to_admin")
-async def feedback_start(call: types.CallbackQuery, state: FSMContext):
-    await state.set_state(UserStates.waiting_for_contact_msg)
-    await call.message.answer("📝 Xabarni yozing:")
-
-@dp.message(UserStates.waiting_for_contact_msg)
-async def feedback_send(m: types.Message, state: FSMContext):
-    await state.clear()
-    await bot.send_message(ADMIN_ID, f"📩 #Aloqa\n👤 {m.from_user.full_name}\n\n{m.text}")
-    await m.answer("✅ Yuborildi!")
-
+# Web saytga kirish
 @dp.message(F.text == "🌐 Saytga kirish")
 async def web_h(m: types.Message):
     kb = InlineKeyboardBuilder()
     kb.button(text="Sayt", url="https://shodlikai.github.io/new_3/dastur.html")
     await m.answer("Link:", reply_markup=kb.as_markup())
-
-@dp.message(F.text == "ℹ️ Yordam")
-async def help_h(m: types.Message):
-    await m.answer("Faqat Audio yuboring.")
+            
