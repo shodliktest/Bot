@@ -12,7 +12,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 import whisper
 from deep_translator import GoogleTranslator
 
-# MODULLAR
+# MODULLAR (Loyiha fayllaridan)
 from config import BOT_TOKEN, ADMIN_ID
 from database import update_user, update_stats, load_db
 from utils import get_uz_time, clean_text, delete_temp_files, format_time_stamp
@@ -21,6 +21,7 @@ from keyboards import (
     get_admin_kb, get_contact_kb
 )
 
+# --- BOTNI YARATISH ---
 try:
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
@@ -28,31 +29,36 @@ except Exception as e:
     st.error(f"Token xatosi: {e}")
     st.stop()
 
-# --- STATES ---
+# --- HOLATLAR (STATES) ---
 class UserStates(StatesGroup):
     waiting_for_contact_msg = State()
 
 class AdminStates(StatesGroup):
     waiting_for_bc = State()
 
+# --- O'ZGARUVCHILAR ---
 async_lock = asyncio.Lock()
 waiting_users = 0
 user_data = {}
 
+# --- WHISPER MODELINI YUKLASH ---
 @st.cache_resource
 def load_whisper():
     return whisper.load_model("base")
 
 model_local = load_whisper()
 
+# ==========================================
+#              HANDLERLAR
+# ==========================================
+
 # --- 1. START VA YANGI USER NOTIFICATION ---
 @dp.message(Command("start"))
 async def cmd_start(m: types.Message):
     # Bazaga yozish
-    count, is_new = 0, True # Database logikasi ichida hal bo'ladi
     update_user(m.from_user)
     
-    # Adminga to'liq hisobot (User qayta start bossa ham boradi, nazorat uchun)
+    # Adminga to'liq hisobot
     try:
         u_link = f"@{m.from_user.username}" if m.from_user.username else "Username yo'q"
         msg = (
@@ -71,7 +77,7 @@ async def cmd_start(m: types.Message):
     )
     await m.answer(welcome, reply_markup=get_main_menu(m.from_user.id), parse_mode="HTML")
 
-# --- 2. YORDAM (MUKAMMAL) ---
+# --- 2. YORDAM (MUKAMMAL QO'LLANMA) ---
 @dp.message(F.text == "ℹ️ Yordam")
 async def help_h(m: types.Message):
     text = (
@@ -91,12 +97,12 @@ async def help_h(m: types.Message):
     )
     await m.answer(text, parse_mode="HTML")
 
-# --- 3. ALOQA VA FEEDBACK (REPLAY BILAN) ---
+# --- 3. ALOQA VA FEEDBACK (REPLY BILAN) ---
 @dp.message(F.text == "👨‍💻 Bog'lanish")
 async def contact_h(m: types.Message):
     await m.answer(
         "👨‍💻 <b>Admin bilan aloqa bo'limi.</b>\n\n"
-        "Taklif yoki shikoyatingiz bo'lsa, 'Yozish' tugmasini bosing va xabaringizni qoldiring. "
+        "Taklif yoki shikoyatingiz bo'lsa, 'Adminga yozish' tugmasini bosing va xabaringizni qoldiring. "
         "Admin javobi shu bot orqali keladi.",
         reply_markup=get_contact_kb(), parse_mode="HTML"
     )
@@ -147,8 +153,7 @@ async def admin_reply_handler(m: types.Message):
     else:
         await m.answer("❌ User ID si topilmadi. Iltimos, faqat botdan kelgan murojaat xabariga reply qiling.")
 
-
-# --- 5. AUDIO STEP-BY-STEP ---
+# --- 5. AUDIO QABUL QILISH VA SOZLAMALAR ---
 
 @dp.message(F.audio | F.voice)
 async def handle_audio(m: types.Message):
@@ -195,7 +200,7 @@ async def view_cb(call: types.CallbackQuery):
     )
     await call.message.edit_text(text, reply_markup=get_format_kb(), parse_mode="HTML")
 
-# --- 6. PROCESSOR (PROGRESS BAR 5% YANGILANISH BILAN) ---
+# --- 6. PROCESSOR (ENG MUHIM QISM) ---
 @dp.callback_query(F.data.startswith("f_"))
 async def start_process(call: types.CallbackQuery):
     global waiting_users
@@ -211,9 +216,8 @@ async def start_process(call: types.CallbackQuery):
         audio_path = f"audio_{chat_id}.mp3"
         result_path = f"res_{chat_id}.txt"
         
-        # Progress Bar funksiyasi (chiroyli va bosqichma-bosqich)
+        # Progress Bar funksiyasi
         async def show_progress(percent, status_text):
-            # 20 ta kvadrat: har bir kvadrat 5%
             blocks = int(percent // 5) 
             bar = "🟩" * blocks + "⬜" * (20 - blocks)
             try:
@@ -226,74 +230,84 @@ async def start_process(call: types.CallbackQuery):
             except: pass
 
         try:
-            # 1. YUKLASH (0% dan 20% gacha - har 5% da)
+            # 1. YUKLASH (0% - 25%)
             for p in range(0, 25, 5):
                 await show_progress(p, "Fayl serverga yuklanmoqda...")
-                await asyncio.sleep(0.1) # Simulyatsiya
+                await asyncio.sleep(0.1)
             
             file = await bot.get_file(data['fid'])
             await bot.download_file(file.file_path, audio_path)
             await show_progress(25, "Fayl qabul qilindi.")
 
-            # 2. TAHLIL (25% dan 75% gacha)
-            # Whisper katta model bo'lgani uchun, u ishlayotganda real vaqtda yangilash qiyin.
-            # Lekin biz user zerikmasligi uchun oraliq xabar beramiz.
-            await show_progress(30, "Sun'iy intellekt ishga tushdi...")
-            await show_progress(40, "Ovoz to'lqinlari o'qilmoqda...")
-            
-            # Asosiy og'ir jarayon
+            # 2. TAHLIL (Whisper) (25% - 75%)
+            await show_progress(30, "Sun'iy intellekt tinglamoqda...")
             res = await asyncio.to_thread(model_local.transcribe, audio_path)
             segments = res['segments']
             
-            await show_progress(75, "Matn tayyorlandi. Tarjima tekshirilmoqda...")
+            await show_progress(75, "Matn tayyor. Tarjima va formatlash...")
 
-            # 3. FORMATLASH VA TARJIMA (75% dan 95% gacha)
+            # 3. FORMATLASH VA TARJIMA (75% - 99%)
             tr_code = data.get('tr_lang') if data.get('tr_lang') != "orig" else None
             final_text = ""
             
             total_segs = len(segments)
             processed = 0
-
-            # Segmentlarni qayta ishlash
-            temp_text_list = []
             
+            # --- FULL CONTEXT (Yaxlit matn) ---
             if data.get('view') == "full":
+                paragraph_list = [] 
+                
                 for s in segments:
-                    seg_text = clean_text(s['text'].strip())
+                    original_text = clean_text(s['text'].strip())
+                    if not original_text: continue
+
+                    block = original_text 
+
+                    # Tarjima kerak bo'lsa
                     if tr_code:
                         try:
-                            tr = GoogleTranslator(source='auto', target=tr_code).translate(seg_text)
-                            temp_text_list.append(f"{seg_text} ({clean_text(tr)})")
-                        except: temp_text_list.append(seg_text)
-                    else:
-                        temp_text_list.append(seg_text)
+                            # Butun gapni tarjima qilamiz
+                            translated_text = await asyncio.to_thread(
+                                GoogleTranslator(source='auto', target=tr_code).translate, s['text']
+                            )
+                            # DIZAYN: Asl matn + pastidan (tarjima)
+                            block = f"{original_text}\n<i>({clean_text(translated_text)})</i>"
+                        except: pass
                     
-                    # Jarayonni ko'rsatish (har 10 ta segmentda yangilash)
-                    processed += 1
-                    if processed % 10 == 0 or processed == total_segs:
-                        prog = 75 + int((processed / total_segs) * 20)
-                        await show_progress(prog, f"Formatlash: {processed}/{total_segs} qism...")
-                
-                final_text = " ".join(temp_text_list)
+                    paragraph_list.append(block)
 
-            else: # Time Split
+                    # Progress yangilash
+                    processed += 1
+                    if processed % 5 == 0:
+                        prog = 75 + int((processed / total_segs) * 20)
+                        await show_progress(prog, f"Formatlash: {processed}/{total_segs}...")
+                
+                # Abzatslar orasiga 2 qator joy
+                final_text = "\n\n".join(paragraph_list)
+
+            # --- TIME SPLIT (Vaqt bilan) ---
+            else:
                 for s in segments:
                     tm = format_time_stamp(s['start'])
-                    seg_text = clean_text(s['text'].strip())
+                    original_text = clean_text(s['text'].strip())
+                    
                     if tr_code:
                         try:
-                            tr = GoogleTranslator(source='auto', target=tr_code).translate(seg_text)
-                            final_text += f"{tm} {seg_text}\n<i>({clean_text(tr)})</i>\n\n"
-                        except: final_text += f"{tm} {seg_text}\n\n"
-                    else: final_text += f"{tm} {seg_text}\n\n"
+                            translated_text = await asyncio.to_thread(
+                                GoogleTranslator(source='auto', target=tr_code).translate, s['text']
+                            )
+                            final_text += f"{tm} {original_text}\n<i>({clean_text(translated_text)})</i>\n\n"
+                        except: 
+                            final_text += f"{tm} {original_text}\n\n"
+                    else:
+                        final_text += f"{tm} {original_text}\n\n"
                     
                     processed += 1
-                    if processed % 10 == 0 or processed == total_segs:
-                        prog = 75 + int((processed / total_segs) * 20)
-                        await show_progress(prog, f"Formatlash: {processed}/{total_segs} qism...")
+                    if processed % 10 == 0:
+                        await show_progress(75 + int((processed / total_segs) * 20), "Formatlash...")
 
-            # 4. YAKUNLASH (100%)
-            await show_progress(99, "Fayl tayyorlanmoqda...")
+            # 4. YUBORISH (100%)
+            await show_progress(99, "Fayl yuborilmoqda...")
             
             creator = data['uname']
             if not creator.startswith('@'): creator = f"@{creator.replace(' ', '_')}"
@@ -309,18 +323,19 @@ async def start_process(call: types.CallbackQuery):
                 if len(final_text) > 4000:
                     for i in range(0, len(final_text), 4000):
                         await call.message.answer(final_text[i:i+4000], parse_mode="HTML")
-                else: await call.message.answer(final_text, parse_mode="HTML")
+                else: 
+                    await call.message.answer(final_text, parse_mode="HTML")
 
             await wait_msg.delete()
 
         except Exception as e:
-            await call.message.answer(f"❌ <b>Jarayonda xatolik yuz berdi:</b>\n{str(e)}", parse_mode="HTML")
+            await call.message.answer(f"❌ <b>Xatolik yuz berdi:</b>\n{str(e)}", parse_mode="HTML")
         finally:
             delete_temp_files(audio_path, result_path)
             waiting_users -= 1
             if chat_id in user_data: del user_data[chat_id]
 
-# --- ADMIN QISMI ---
+# --- 7. ADMIN PANEL HANDLERLARI ---
 @dp.message(F.text == "🔑 Admin Panel", F.chat.id == ADMIN_ID)
 async def admin_panel(m: types.Message):
     await m.answer("🚀 Admin Panel", reply_markup=get_admin_kb())
@@ -366,10 +381,9 @@ async def bc_process(m: types.Message, state: FSMContext):
         except: pass
     await msg.edit_text(f"✅ {cnt} kishiga bordi.")
 
-# Web saytga kirish
+# --- 8. SAYTGA KIRISH ---
 @dp.message(F.text == "🌐 Saytga kirish")
 async def web_h(m: types.Message):
     kb = InlineKeyboardBuilder()
     kb.button(text="Sayt", url="https://shodlikai.github.io/new_3/dastur.html")
     await m.answer("Link:", reply_markup=kb.as_markup())
-            
