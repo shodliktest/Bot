@@ -6,3 +6,4 @@ pytz
 torch
 pandas
 numpy
+plotly
