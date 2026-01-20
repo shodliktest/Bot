@@ -12,14 +12,14 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 import whisper
 from deep_translator import GoogleTranslator
 
-# MODULLAR (Importlar to'g'ri bo'lishi kerak)
+# MODULLAR
 from config import BOT_TOKEN, ADMIN_ID
 from database import update_user, update_stats, load_db
 from utils import get_uz_time, clean_text, video_to_audio, delete_temp_files, format_time_stamp
-# Keyboards faylini pastda yaratamiz, hozircha import qilib turamiz
+# Keyboards faylidan importlar
 from keyboards import get_main_menu, get_lang_kb, get_format_kb, get_admin_kb
 
-# --- MUHIM QISM: BOT VA DP NI TEPADA YARATISH ---
+# --- MUHIM: BOT VA DP NI TEPADA YARATAMIZ ---
 try:
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
@@ -46,7 +46,7 @@ def load_whisper():
 model_local = load_whisper()
 
 # ---------------------------------------------------
-# HANDLERLAR (Endi dp yaratilganidan keyin ishlaydi)
+# HANDLERLAR
 # ---------------------------------------------------
 
 # 1. START
@@ -89,7 +89,7 @@ async def handle_media(m: types.Message):
     }
     await m.answer("🗣 <b>Videodagi/Audiodagi til qaysi?</b>", reply_markup=get_lang_kb(), parse_mode="HTML")
 
-# 3. CALLBACKS
+# 3. CALLBACKS (Manba tili)
 @dp.callback_query(F.data.startswith("src_"))
 async def src_lang_cb(call: types.CallbackQuery):
     lang = call.data.replace("src_", "")
@@ -103,6 +103,7 @@ async def src_lang_cb(call: types.CallbackQuery):
     kb.adjust(1)
     await call.message.edit_text("🌍 <b>Tarjima kerakmi?</b>", reply_markup=kb.as_markup(), parse_mode="HTML")
 
+# Tarjima tili
 @dp.callback_query(F.data.startswith("tr_"))
 async def tr_lang_cb(call: types.CallbackQuery):
     lang = call.data.replace("tr_", "")
@@ -113,12 +114,13 @@ async def tr_lang_cb(call: types.CallbackQuery):
     kb.button(text="📖 Full Context (Butun)", callback_data="v_full")
     await call.message.edit_text("📄 <b>Ko'rinishni tanlang:</b>", reply_markup=kb.as_markup(), parse_mode="HTML")
 
+# Format
 @dp.callback_query(F.data.startswith("v_"))
 async def view_cb(call: types.CallbackQuery):
     user_data[call.message.chat.id]['view'] = call.data.replace("v_", "")
     await call.message.edit_text("💾 <b>Qanday formatda yuboray?</b>", reply_markup=get_format_kb(), parse_mode="HTML")
 
-# 4. PROCESSOR
+# 4. PROCESSOR (Asosiy ish)
 @dp.callback_query(F.data.startswith("f_"))
 async def start_process(call: types.CallbackQuery):
     global waiting_users
@@ -243,4 +245,52 @@ async def list_cb(call: types.CallbackQuery):
         for x in range(0, len(msg), 4000): await call.message.answer(msg[x:x+4000], parse_mode="HTML")
     else: await call.message.answer(msg, parse_mode="HTML")
 
-# Broadcast va Feedback handlerlarni ham shu yerga qo'shishingiz mumkin...
+@dp.callback_query(F.data == "adm_bc")
+async def bc_cb(call: types.CallbackQuery, state: FSMContext):
+    await call.message.answer("📢 Xabarni yuboring:")
+    await state.set_state(AdminStates.waiting_for_bc)
+
+@dp.message(AdminStates.waiting_for_bc)
+async def bc_process(m: types.Message, state: FSMContext):
+    await state.clear()
+    db = load_db()
+    users = db['users']
+    cnt = 0
+    msg = await m.answer("⏳ Yuborilmoqda...")
+    for uid in users:
+        try:
+            await bot.copy_message(chat_id=uid, from_chat_id=ADMIN_ID, message_id=m.message_id)
+            cnt += 1
+            await asyncio.sleep(0.05)
+        except: pass
+    await msg.edit_text(f"✅ {cnt} kishiga bordi.")
+
+# Feedback
+@dp.message(F.text == "👨‍💻 Bog'lanish")
+async def contact_h(m: types.Message):
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✍️ Bot orqali yozish", callback_data="msg_to_admin")
+    kb.adjust(1)
+    await m.answer("Admin bilan aloqa:", reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data == "msg_to_admin")
+async def feedback_start(call: types.CallbackQuery, state: FSMContext):
+    await state.set_state(UserStates.waiting_for_contact_msg)
+    await call.message.answer("📝 Xabarni yozing:")
+
+@dp.message(UserStates.waiting_for_contact_msg)
+async def feedback_send(m: types.Message, state: FSMContext):
+    await state.clear()
+    await bot.send_message(ADMIN_ID, f"📩 #Aloqa\n👤 {m.from_user.full_name} ({m.from_user.id})\n\n{m.text}")
+    await m.answer("✅ Yuborildi!")
+
+@dp.message(F.text == "🌐 Saytga kirish")
+async def web_h(m: types.Message):
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Sayt", url="https://shodlikai.github.io/new_3/dastur.html")
+    await m.answer("Link:", reply_markup=kb.as_markup())
+
+@dp.message(F.text == "ℹ️ Yordam")
+async def help_h(m: types.Message):
+    await m.answer("Audio/Video yuboring va ko'rsatmalarga amal qiling.")
+    
