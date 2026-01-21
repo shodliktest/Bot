@@ -73,7 +73,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("⚡ NEON SHodlik ⚡")
+st.title("⚡ NEON ⚡")
 
 # --- 2. MA'LUMOTLARNI YUKLASH ---
 try:
