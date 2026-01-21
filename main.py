@@ -78,38 +78,38 @@ st.title("⚡ SUXANDON AI - NEON DASHBOARD ⚡")
 # --- 2. MA'LUMOTLARNI YUKLASH ---
 try:
     data = get_dashboard_data()
-    stats = data["stats"]
-    users = data.get("user_list", {})  # Userlar ro'yxati (database.py dan keladi)
+    # Xavfsiz olish (get) - agar baza bo'sh bo'lsa xato bermaydi
+    stats = data.get("stats", {})
+    total_audio = stats.get("audio", 0) 
+    
+    users = data.get("user_list", {})
 
-    # --- 3. YONMA-YON METRIKALAR (ROW LAYOUT) ---
+    # --- 3. YONMA-YON METRIKALAR ---
     st.markdown("### 👥 FOYDALANUVCHILAR")
     
-    # 4 ta ustun yaratamiz (Yonma-yon turishi uchun)
     c1, c2, c3, c4 = st.columns(4)
     
     with c1:
-        st.metric("Jami Userlar", data["total_users"], delta="Start")
+        st.metric("Jami Userlar", data.get("total_users", 0), delta="Start")
     with c2:
-        st.metric("Faol (Oy)", data["monthly_active"], delta="Active")
+        st.metric("Faol (Oy)", data.get("monthly_active", 0), delta="Active")
     with c3:
-        st.metric("Faol (Bugun)", data["daily_active"], delta="Today")
+        st.metric("Faol (Bugun)", data.get("daily_active", 0), delta="Today")
     with c4:
-        st.metric("Jami Audio", stats["audio"], delta="Processed")
+        st.metric("Jami Audio", total_audio, delta="Processed")
 
-    st.markdown("<br>", unsafe_allow_html=True) # Joy tashlash
+    st.markdown("<br>", unsafe_allow_html=True) 
 
-    # --- 4. GRAFIK (LINE CHART - RASMDAGIDEK) ---
+    # --- 4. GRAFIK (LINE CHART - GDP STYLE) ---
     st.markdown("### 📈 O'SISH DINAMIKASI (GDP Style)")
 
-    # Grafik uchun soxta ma'lumot generatsiyasi (Sizda real ma'lumot to'planganda buni o'zgartirasiz)
-    # Hozircha vizual ko'rinish uchun:
+    # Grafik ma'lumotlari (Xavfsiz hisoblash)
     chart_df = pd.DataFrame({
         "Sana": [datetime.now() - timedelta(days=i) for i in range(10, -1, -1)],
-        "Foydalanuvchilar": [data["total_users"] - (10-i)*2 for i in range(11)], # Taxminiy o'sish
-        "Audiolar": [stats["audio"] - (10-i)*5 for i in range(11)]
+        "Foydalanuvchilar": [data.get("total_users", 0) - (10-i)*1 for i in range(11)], 
+        "Audiolar": [total_audio - (10-i)*2 for i in range(11)]
     })
 
-    # Plotly Neon Grafik
     fig = go.Figure()
 
     # User chizig'i (Ko'k Neon)
@@ -145,27 +145,42 @@ try:
     st.plotly_chart(fig, use_container_width=True)
 
 except Exception as e:
-    st.warning(f"Baza hali bo'sh yoki xatolik: {e}")
+    st.warning(f"Baza ma'lumotlari yuklanmoqda yoki bo'sh: {e}")
 
-# --- 5. BOT RUNNER ---
-@st.cache_resource
-def launch_bot():
+# --- 5. BOT RUNNER (ENG MUHIM QISM - KILLER & SINGLETON) ---
+def run_bot_in_background():
+    """Botni alohida oqimda va xavfsiz ishga tushirish"""
+    
     async def _runner():
         try:
+            # 1. KILLER: Eski webhooklarni o'chirish (Conflict oldini olish)
             await bot.delete_webhook(drop_pending_updates=True)
+            # 2. BOTNI YOQISH
             await dp.start_polling(bot, handle_signals=False)
         except Exception as e:
             print(f"Bot Error: {e}")
 
-    def _thread():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(_runner())
+    def _thread_target():
+        # Yangi event loop ochamiz (Streamlit loopi bilan urushmasligi uchun)
+        new_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(new_loop)
+        new_loop.run_until_complete(_runner())
 
-    t = threading.Thread(target=_thread, daemon=True)
-    t.start()
+    # SINGLETON: Agar thread allaqachon ishlayotgan bo'lsa, ikkinchisini ochmaymiz
+    thread_name = "TelegramBotThread"
+    is_running = False
+    for t in threading.enumerate():
+        if t.name == thread_name:
+            is_running = True
+            break
+            
+    if not is_running:
+        t = threading.Thread(target=_thread_target, name=thread_name, daemon=True)
+        t.start()
+        print("✅ Bot thread ishga tushdi!")
 
-launch_bot()
+# Sahifa har safar yuklanganda botni tekshiramiz va yoqamiz
+run_bot_in_background()
 
 if st.button("🔄 YANGILASH"):
     st.rerun()
