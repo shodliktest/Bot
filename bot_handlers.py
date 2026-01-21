@@ -134,7 +134,7 @@ async def admin_reply_handler(m: types.Message):
     else:
         await m.answer("❌ User ID topilmadi. Faqat bot xabariga reply qiling.")
 
-# --- 5. AUDIO STEP 1 ---
+# --- 5. AUDIO QABUL QILISH (@USER QO'SHILDI) ---
 @dp.message(F.audio | F.voice)
 async def handle_audio(m: types.Message):
     fid = m.audio.file_id if m.audio else m.voice.file_id
@@ -144,7 +144,16 @@ async def handle_audio(m: types.Message):
         await m.answer("❌ <b>Kechirasiz, fayl hajmi 20MB dan oshmasligi kerak!</b>", parse_mode="HTML")
         return
 
-    user_data[m.chat.id] = {'fid': fid, 'uname': m.from_user.full_name, 'tr_lang': None, 'view': None}
+    # USERNAME ANIQLASH (TO'G'RILANDI)
+    if m.from_user.username:
+        # Agar username bor bo'lsa, oldiga @ qo'yamiz
+        u_name = f"@{m.from_user.username}"
+    else:
+        # Agar yo'q bo'lsa, ismini olamiz
+        u_name = m.from_user.full_name
+
+    user_data[m.chat.id] = {'fid': fid, 'uname': u_name, 'tr_lang': None, 'view': None}
+    
     text = (
         "🌍 <b>Audio qabul qilindi. Uni tarjima qilaymi?</b>\n\n"
         "<i>Agarda tarjima tilini tanlasangiz, asl matn qoladi va uning ostida (qavs ichida) tarjimasi yoziladi.</i>"
@@ -161,7 +170,7 @@ async def view_cb(call: types.CallbackQuery):
     user_data[call.message.chat.id]['view'] = call.data.replace("v_", "")
     await call.message.edit_text("💾 <b>Natijani qaysi formatda olishni xohlaysiz?</b>", reply_markup=get_format_kb(), parse_mode="HTML")
 
-# --- 6. PROCESSOR (TXT VA CHAT ALOHIDA) ---
+# --- 6. PROCESSOR (PROGRESS BAR + IMZO TO'G'RILANDI) ---
 @dp.callback_query(F.data.startswith("f_"))
 async def start_process(call: types.CallbackQuery):
     global waiting_users
@@ -176,37 +185,47 @@ async def start_process(call: types.CallbackQuery):
     async with async_lock:
         audio_path, result_path = f"audio_{chat_id}.mp3", f"res_{chat_id}.txt"
         
-        async def show_progress(percent, status_text):
+        # PROFESSIONAL PROGRESS BAR
+        async def show_progress(percent, status_label):
             blocks = int(percent // 5) 
             bar = "🟩" * blocks + "⬜" * (20 - blocks)
             try:
                 await wait_msg.edit_text(
-                    f"⚙️ <b>Jarayon:</b> {status_text}\n\n{bar} <b>{percent}%</b>",
+                    f"📊 <b>Umumiy tahlil jarayoni</b>\n"
+                    f"⚙️ <i>Bosqich: {status_label}</i>\n\n"
+                    f"{bar} <b>{percent}%</b>",
                     parse_mode="HTML"
                 )
             except: pass
 
         try:
-            await show_progress(10, "Fayl yuklanmoqda...")
+            # 1. YUKLASH
+            for p in range(0, 21, 5):
+                await show_progress(p, "Fayl serverga yuklanmoqda...")
+                await asyncio.sleep(0.1)
+
             file = await bot.get_file(data['fid'])
             await bot.download_file(file.file_path, audio_path)
 
-            await show_progress(40, "AI ovozni o'qimoqda...")
+            # 2. TAHLIL
+            await show_progress(25, "AI ovozni o'qimoqda...")
             res = await asyncio.to_thread(model_local.transcribe, audio_path)
             segments = res['segments']
             total_segs = len(segments)
+            
+            await show_progress(70, "Tahlil tugadi. Formatlash...")
 
             tr_code = data.get('tr_lang') if data.get('tr_lang') != "orig" else None
             
-            # IKKI XIL LIST YARATAMIZ
-            list_html = [] # Chat uchun (Bezakli)
-            list_txt = []  # Fayl uchun (Toza)
+            # IKKI XIL VARIANT (HTML va TXT)
+            list_html = []
+            list_txt = []
             
             for i, s in enumerate(segments):
                 raw_text = s['text'].strip()
                 if not raw_text: continue
                 
-                # Chat uchun HTML escape, Fayl uchun o'zi
+                # Chat uchun HTML escape, Fayl uchun toza
                 text_html = clean_text(raw_text)
                 text_txt = raw_text
 
@@ -218,11 +237,10 @@ async def start_process(call: types.CallbackQuery):
                         translated = await asyncio.to_thread(GoogleTranslator(source='auto', target=tr_code).translate, raw_text)
                         # Chat: <i>(tarjima)</i>
                         tr_html = f"\n<i>({clean_text(translated)})</i>"
-                        # Fayl: (tarjima) TEGSIZ
+                        # Fayl: (tarjima)
                         tr_txt = f"\n({translated})"
                     except: pass
                 
-                # Formatlash
                 timestamp = format_time_stamp(s['start'])
                 
                 if data.get('view') == "split":
@@ -235,44 +253,55 @@ async def start_process(call: types.CallbackQuery):
                 list_html.append(block_html)
                 list_txt.append(block_txt)
                 
-                if i % 5 == 0 or i == total_segs - 1:
+                # Progress yangilash
+                if i % max(1, total_segs // 5) == 0:
                     prog = 70 + int(((i+1)/total_segs)*25)
-                    await show_progress(prog, "Matn tayyorlanmoqda...")
+                    await show_progress(prog if prog < 96 else 95, "Matn tayyorlanmoqda...")
 
-            # Yakuniy matnlarni yig'ish
+            # --- YAKUNIY YIG'ISH VA IMZO (PECHAT) ---
+            
+            # Bot va vaqt ma'lumotlari
+            bot_info = await bot.get_me()
+            bot_username = f"@{bot_info.username}"
+            now_time = get_uz_time()
+            user_creator = data['uname'] # Bu yerda endi @User bor
+
+            # 1. Chat uchun (HTML Pechat)
             final_html = "\n\n".join(list_html)
             imzo_html = (
                 f"\n\n---\n"
-                f"👤 <b>Yaratuvchi:</b> {data['uname']}\n"
-                f"🤖 <b>Bot:</b> @{(await bot.get_me()).username}\n"
-                f"⏰ <b>Vaqt:</b> {get_uz_time()}"
+                f"👤 <b>Yaratuvchi:</b> {user_creator}\n"
+                f"🤖 <b>Bot:</b> {bot_username}\n"
+                f"⏰ <b>Vaqt:</b> {now_time}"
             )
             final_html += imzo_html
 
+            # 2. Fayl uchun (Toza Pechat)
             final_txt = "\n\n".join(list_txt)
             imzo_txt = (
                 f"\n\n---\n"
-                f"Yaratuvchi: {data['uname']}\n"
-                f"Bot: @{(await bot.get_me()).username}\n"
-                f"Vaqt: {get_uz_time()}"
+                f"Yaratuvchi: {user_creator}\n"
+                f"Bot: {bot_username}\n"
+                f"Vaqt: {now_time}"
             )
             final_txt += imzo_txt
 
+            await show_progress(100, "Tayyor! Yuborilmoqda...")
             update_stats('audio', fmt)
-            await show_progress(99, "Yuborilmoqda...")
 
             if fmt == "txt":
-                # FAYLGA TOZA MATNNI YOZAMIZ
+                # FAYLGA YOZISH (Toza variant)
                 with open(result_path, "w", encoding="utf-8") as f:
                     f.write(final_txt)
                 
+                # Fayl yuborish (Caption bilan)
                 await call.message.answer_document(
                     types.FSInputFile(result_path), 
-                    caption="✅ <b>Matn tayyor!</b>\nFayl ichida ortiqcha belgilar yo'q.", 
+                    caption=f"✅ <b>Natija tayyor!</b>\n\n👤 {user_creator}\n🤖 {bot_username}\n⏰ {now_time}", 
                     parse_mode="HTML"
                 )
             else:
-                # CHATGA HTML MATNNI YUBORAMIZ
+                # CHATGA YUBORISH (HTML variant)
                 if len(final_html) > 4000:
                     for x in range(0, len(final_html), 4000):
                         await call.message.answer(final_html[x:x+4000], parse_mode="HTML")
@@ -336,4 +365,4 @@ async def web_h(m: types.Message):
     kb = InlineKeyboardBuilder()
     kb.button(text="Saytga o'tish", url="https://shodlikai.github.io/new_3/dastur.html")
     await m.answer("🌐 Link:", reply_markup=kb.as_markup(), parse_mode="HTML")
-                      
+            
