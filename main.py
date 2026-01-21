@@ -11,7 +11,7 @@ from bot_handlers import dp, bot
 from database import get_dashboard_data
 
 # --- 1. PAGE CONFIG & NEON CSS ---
-st.set_page_config(page_title="Suxandon AI Admin", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="SHodlik AI Admin", page_icon="⚡", layout="wide")
 
 # NEON CSS STYLES
 st.markdown("""
@@ -46,7 +46,7 @@ st.markdown("""
     /* Sarlavha */
     h1 {
         color: #cc00ff;
-        text-shadow: 0 0 10px #cc00ff, 0 0 20px #cc00ff;
+        text-shadow: 0 0 10px #cc00ff, 0 0 10px #cc00ff;
         text-align: center;
         font-family: 'Courier New', Courier, monospace;
     }
@@ -73,7 +73,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("⚡ SUXANDON AI - NEON DASHBOARD ⚡")
+st.title("⚡ NEON DASHBOARD ⚡")
 
 # --- 2. MA'LUMOTLARNI YUKLASH ---
 try:
