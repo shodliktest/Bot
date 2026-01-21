@@ -63,7 +63,7 @@ async def cmd_start(m: types.Message):
 
     welcome = (
         f"👋 <b>Assalomu alaykum, {m.from_user.first_name}!</b>\n\n"
-        f"🎙 <b>Suxandon AI</b> botiga xush kelibsiz.\n"
+        f"🎙 <b>SHodlik AI</b> botiga xush kelibsiz.\n"
         "Men har qanday audio xabarni, qo'shiqni yoki intervyuni yozma matnga aylantirib, kerakli tilga tarjima qilib beraman.\n\n"
         "🚀 <b>Ishni boshlash uchun menga audio fayl yoki ovozli xabar yuboring!</b>"
     )
@@ -73,7 +73,7 @@ async def cmd_start(m: types.Message):
 @dp.message(F.text == "ℹ️ Yordam")
 async def help_h(m: types.Message):
     text = (
-        "📚 <b>SUXANDON AI - QO'LLANMA</b>\n\n"
+        "📚 <b>SHodlik AI - QO'LLANMA</b>\n\n"
         "Bu bot orqali siz audio xabarlar, qo'shiqlar yoki intervyularni matn ko'rinishiga o'tkazishingiz mumkin.\n\n"
         "<b>Qanday ishlatiladi?</b>\n"
         "1️⃣ <b>Audio yuboring:</b> Botga mp3 fayl yoki voice (ovozli xabar) yuboring.\n"
